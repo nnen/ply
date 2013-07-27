@@ -1210,9 +1210,10 @@ _is_identifier = re.compile(r'^[a-zA-Z0-9_-]+$')
 
 class Production(object):
     reduced = 0
-    def __init__(self,number,name,prod,precedence=('right',0),func=None,file='',line=0):
+    def __init__(self,number,name,prod,names,precedence=('right',0),func=None,file='',line=0):
         self.name     = name
         self.prod     = tuple(prod)
+        self.names    = tuple(names)
         self.number   = number
         self.func     = func
         self.callable = None
@@ -1254,7 +1255,7 @@ class Production(object):
 
     def __getitem__(self,index):
         return self.prod[index]
-            
+    
     # Return the nth lr_item from the production (or None if at the end)
     def lr_item(self,n):
         if n > len(self.prod): return None
@@ -1446,7 +1447,7 @@ class Grammar(object):
     # are valid and that %prec is used correctly.
     # -----------------------------------------------------------------------------
 
-    def add_production(self,prodname,syms,func=None,file='',line=0):
+    def add_production(self,prodname,syms,names,func=None,file='',line=0):
 
         if prodname in self.Terminals:
             raise GrammarError("%s:%d: Illegal rule name %r. Already defined as a token" % (file,line,prodname))
@@ -1511,7 +1512,7 @@ class Grammar(object):
                 self.Nonterminals[t].append(pnumber)
 
         # Create a production and add it to the list of productions
-        p = Production(pnumber,prodname,syms,prodprec,func,file,line)
+        p = Production(pnumber,prodname,syms,names,prodprec,func,file,line)
         self.Productions.append(p)
         self.Prodmap[map] = p
 
@@ -1534,7 +1535,7 @@ class Grammar(object):
             start = self.Productions[1].name
         if start not in self.Nonterminals:
             raise GrammarError("start symbol %s undefined" % start)
-        self.Productions[0] = Production(0,"S'",[start])
+        self.Productions[0] = Production(0,"S'",[start],[None])
         self.Nonterminals[start].append(0)
         self.Start = start
 
@@ -2779,6 +2780,8 @@ def get_caller_module_dict(levels):
 # This takes a raw grammar rule string and parses it into production data
 # -----------------------------------------------------------------------------
 def parse_grammar(doc,file,line):
+    return GrammarParser().parse(doc, file, line)
+    
     grammar = []
     # Split the doc string into lines
     pstrings = doc.splitlines()
@@ -2810,6 +2813,65 @@ def parse_grammar(doc,file,line):
             raise SyntaxError("%s:%d: Syntax error in rule %r" % (file,dline,ps.strip()))
 
     return grammar
+
+
+class GrammarParser(object):
+    TOKEN = re.compile(r'[^:= \t\n"]+|:|\||=|"[^"]*"')
+    
+    def tokenize(self, source, filename, line):
+        lines = source.splitlines()
+        current_line = line
+        
+        for line in lines:
+            current_line += 1
+            self.last_line = current_line
+            tokens = [m.group(0) for m in self.TOKEN.finditer(line)]
+            if len(tokens) > 0:
+                yield current_line, tokens
+    
+    def parse(self, source, filename, line):
+        last_production = None
+        grammar = []
+        
+        for line_no, t in self.tokenize(source, filename, line):
+            print t
+            if t[0] == '|':
+                if not last_production:
+                    raise SyntaxError("%s:%d: Misplaced '|'" % (filename, line_no, ))
+                prod_name = last_production
+                #right_side = t[1:]
+                right_side, names = self._parseRightSide(t[1:])
+            else:
+                prod_name = t[0]
+                last_production = prod_name
+                #right_side = t[2:]
+                right_side, names = self._parseRightSide(t[2:])
+                assign = t[1]
+                if assign != ':' and assign != '::=':
+                    raise SyntaxError("%s:%d: Syntax error. Expected ':'" % (filename, line_no, ))
+            
+            grammar.append((filename, line_no, prod_name, right_side, names))
+        
+        return grammar
+    
+    def _parseRightSide(self, tokens):
+        rest = list(tokens)
+        symbols = []
+        names = []
+        while len(rest) > 0:
+            ident, name, rest = self._parseRHSSymbol(rest)
+            symbols.append(ident)
+            names.append(name)
+        return symbols, names
+    
+    def _parseRHSSymbol(self, tokens):
+        ident = tokens[0]
+        if len(tokens) < 3 or tokens[1] <> '=':
+            return ident, None, tokens[1:]
+        name = ident
+        ident = tokens[2]
+        return ident, name, tokens[3:]
+
 
 # -----------------------------------------------------------------------------
 # ParserReflect()
@@ -3172,14 +3234,14 @@ def yacc(method='LALR', debug=yaccdebug, module=None, tabmodule=tab_module, star
 
     # Add productions to the grammar
     for funcname, gram in pinfo.grammar:
-        file, line, prodname, syms = gram
+        file, line, prodname, syms, names = gram
         try:
-            grammar.add_production(prodname,syms,funcname,file,line)
+            grammar.add_production(prodname,syms,names,funcname,file,line)
         except GrammarError:
             e = sys.exc_info()[1]
             errorlog.error("%s",str(e))
             errors = 1
-
+    
     # Set the grammar start symbols
     try:
         if start is None:
@@ -3221,7 +3283,7 @@ def yacc(method='LALR', debug=yaccdebug, module=None, tabmodule=tab_module, star
     unused_rules = grammar.unused_rules()
     for prod in unused_rules:
         errorlog.warning("%s:%d: Rule %r defined, but not used", prod.file, prod.line, prod.name)
-
+    
     if len(unused_terminals) == 1:
         errorlog.warning("There is 1 unused token")
     if len(unused_terminals) > 1:
