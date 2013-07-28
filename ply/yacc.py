@@ -235,9 +235,17 @@ class YaccSymbol:
 class YaccProduction:
     def __init__(self,s,stack=None):
         self.slice = s
+        self.names = None
         self.stack = stack
         self.lexer = None
         self.parser= None
+    
+    def __getattr__(self, name):
+        if self.names and (name in self.names):
+            return self[self.names[name] + 1]
+        raise AttributeError("YaccProduction object has no attribute %r" %
+                             (name, ))
+    
     def __getitem__(self,n):
         if isinstance(n, slice):
             return [s.value for s in self.slice[n]]
@@ -429,7 +437,10 @@ class LRParser:
                     p = prod[-t]
                     pname = p.name
                     plen  = p.len
-
+                    
+                    pslice.names = p.names
+                    sys.stderr.write("pslice.names = %r\n" % (pslice.names, ))
+                    
                     # Get production function
                     sym = YaccSymbol()
                     sym.type = pname       # Production name
@@ -731,7 +742,9 @@ class LRParser:
                     p = prod[-t]
                     pname = p.name
                     plen  = p.len
-
+                    
+                    pslice.names = p.names
+                    
                     # Get production function
                     sym = YaccSymbol()
                     sym.type = pname       # Production name
@@ -1009,7 +1022,9 @@ class LRParser:
                     p = prod[-t]
                     pname = p.name
                     plen  = p.len
-
+                    
+                    pslice.names = p.names
+                    
                     # Get production function
                     sym = YaccSymbol()
                     sym.type = pname       # Production name
@@ -1213,7 +1228,7 @@ class Production(object):
     def __init__(self,number,name,prod,names,precedence=('right',0),func=None,file='',line=0):
         self.name     = name
         self.prod     = tuple(prod)
-        self.names    = tuple(names)
+        self.names    = names
         self.number   = number
         self.func     = func
         self.callable = None
@@ -1283,7 +1298,7 @@ class Production(object):
 # actually used by the LR parsing engine, plus some additional
 # debugging information.
 class MiniProduction(object):
-    def __init__(self,str,name,len,func,file,line):
+    def __init__(self,str,name,len,func,file,line,names=None):
         self.name     = name
         self.len      = len
         self.func     = func
@@ -1291,6 +1306,7 @@ class MiniProduction(object):
         self.file     = file
         self.line     = line
         self.str      = str
+        self.names    = names
     def __str__(self):
         return self.str
     def __repr__(self):
@@ -2704,9 +2720,9 @@ del _lr_goto_items
             f.write("_lr_productions = [\n")
             for p in self.lr_productions:
                 if p.func:
-                    f.write("  (%r,%r,%d,%r,%r,%d),\n" % (p.str,p.name, p.len, p.func,p.file,p.line))
+                    f.write("  (%r,%r,%d,%r,%r,%d,%r),\n" % (p.str, p.name, p.len, p.func ,p.file ,p.line, p.names))
                 else:
-                    f.write("  (%r,%r,%d,None,None,None),\n" % (str(p),p.name, p.len))
+                    f.write("  (%r,%r,%d,None,None,None,%r),\n" % (str(p), p.name, p.len, p.names))
             f.write("]\n")
             f.close()
 
@@ -2857,11 +2873,12 @@ class GrammarParser(object):
     def _parseRightSide(self, tokens):
         rest = list(tokens)
         symbols = []
-        names = []
+        names = {}
         while len(rest) > 0:
             ident, name, rest = self._parseRHSSymbol(rest)
+            if name:
+                names[name] = len(symbols)
             symbols.append(ident)
-            names.append(name)
         return symbols, names
     
     def _parseRHSSymbol(self, tokens):
